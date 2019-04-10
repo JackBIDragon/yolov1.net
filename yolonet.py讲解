@@ -1,0 +1,72 @@
+def __init__(self, is_training=True):
+        '''
+        构造函数 
+        利用 cfg 文件对网络参数进行初始化，同时定义网络的输入和输出 size 等信息，
+        其中 offset 的作用应该是一个定长的偏移
+        boundery1和boundery2 作用是在输出中确定每种信息的长度（如类别，置信度等）。
+        其中 boundery1 指的是对于所有的 cell 的类别的预测的张量维度，所以是 self.cell_size * self.cell_size * self.num_class
+        boundery2 指的是在类别之后每个cell 所对应的 bounding boxes 的数量的总和，所以是self.boundary1 + self.cell_size * self.cell_size * self.boxes_per_cell
+         
+        args:
+            is_training：训练？
+        '''
+        #VOC 2012数据集类别名
+        self.classes = cfg.CLASSES
+        #类别个数C 20
+        self.num_class = len(self.classes)
+        #网络输入图像大小448， 448 x 448
+        self.image_size = cfg.IMAGE_SIZE
+        #单元格大小S=7  将图像分为SxS的格子
+        self.cell_size = cfg.CELL_SIZE
+        #每个网格边界框的个数B=2
+        self.boxes_per_cell = cfg.BOXES_PER_CELL
+        #网络输出的大小 S*S*(B*5 + C) = 1470
+        self.output_size = (self.cell_size * self.cell_size) *\
+            (self.num_class + self.boxes_per_cell * 5)
+        #图片的缩放比例 64
+        self.scale = 1.0 * self.image_size / self.cell_size        
+        '''#将网络输出分离为类别和置信度以及边界框的大小，输出维度为7*7*20 + 7*7*2 + 7*7*2*4=1470'''
+        #7*7*20
+        self.boundary1 = self.cell_size * self.cell_size * self.num_class
+        #7*7*20+7*7*2
+        self.boundary2 = self.boundary1 +\
+            self.cell_size * self.cell_size * self.boxes_per_cell
+ 
+        #代价函数 权重
+        self.object_scale = cfg.OBJECT_SCALE  #1
+        self.noobject_scale = cfg.NOOBJECT_SCALE  #1
+        self.class_scale = cfg.CLASS_SCALE  #2.0
+        self.coord_scale = cfg.COORD_SCALE  #5.0
+         
+        #学习率0.0001
+        self.learning_rate = cfg.LEARNING_RATE
+        #批大小 45
+        self.batch_size = cfg.BATCH_SIZE
+        #泄露修正线性激活函数 系数0.1
+        self.alpha = cfg.ALPHA
+ 
+        #偏置 形状[7,7,2]
+        self.offset = np.transpose(np.reshape(np.array(
+            [np.arange(self.cell_size)] * self.cell_size * self.boxes_per_cell),
+            (self.boxes_per_cell, self.cell_size, self.cell_size)), (1, 2, 0))
+ 
+        #输入图片占位符 [NONE,image_size,image_size,3]
+        self.images = tf.placeholder(
+            tf.float32, [None, self.image_size, self.image_size, 3],
+            name='images')
+        #构建网络 获取YOLO网络的输出(不经过激活函数的输出)  形状[None,1470]
+        self.logits = self.build_network(
+            self.images, num_outputs=self.output_size, alpha=self.alpha,
+            is_training=is_training)
+ 
+        if is_training:
+            #设置标签占位符 [None,S,S,5+C]  即[None,7,7,25]
+            self.labels = tf.placeholder(
+                tf.float32,
+                [None, self.cell_size, self.cell_size, 5 + self.num_class])
+            #设置损失函数
+            self.loss_layer(self.logits, self.labels)
+            #加入权重正则化之后的损失函数
+            self.total_loss = tf.losses.get_total_loss()
+            #将损失以标量形式显示，该变量命名为total_loss
+            tf.summary.scalar('total_loss', self.total_loss)
